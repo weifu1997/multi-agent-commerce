@@ -2,7 +2,7 @@
 
 > **面向小白的企业级 AI Agent 项目** — 从零理解 Multi-Agent 架构，配套 Python 代码 + 八股文 + 简历模板 + STAR面试话术，找工作全流程覆盖。
 
-[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](python/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](main.py)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
@@ -59,7 +59,7 @@
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Supervisor 协调Agent                           │
-│                  (python/orchestrator/supervisor.py)              │
+│                  (orchestrator/supervisor.py)                     │
 │                                                                   │
 │  ════════════════ Phase 1: 并行执行 ═══════════════════           │
 │  ┌──────────────────────┐    ┌──────────────────────┐            │
@@ -136,7 +136,7 @@ Supervisor 模式                     Handoffs 模式
 
 ### Agent 1：用户画像 Agent
 
-**文件**：[`python/agents/user_profile_agent.py`](python/agents/user_profile_agent.py)
+**文件**：[`agents/user_profile_agent.py`](agents/user_profile_agent.py)
 
 **它做什么？**
 
@@ -167,7 +167,7 @@ return UserProfile(user_id=user_id, segments=["active"], rfm_score=...)
 
 ### Agent 2：商品推荐 Agent
 
-**文件**：[`python/agents/product_rec_agent.py`](python/agents/product_rec_agent.py)
+**文件**：[`agents/product_rec_agent.py`](agents/product_rec_agent.py)
 
 **它做什么？**
 
@@ -193,7 +193,7 @@ return UserProfile(user_id=user_id, segments=["active"], rfm_score=...)
 
 ### Agent 3：营销文案 Agent
 
-**文件**：[`python/agents/marketing_copy_agent.py`](python/agents/marketing_copy_agent.py)
+**文件**：[`agents/marketing_copy_agent.py`](agents/marketing_copy_agent.py)
 
 **它做什么？**
 
@@ -217,7 +217,7 @@ FORBIDDEN_WORDS = ["最好", "第一", "国家级", "全球首", "绝对", "100%
 
 ### Agent 4：库存决策 Agent
 
-**文件**：[`python/agents/inventory_agent.py`](python/agents/inventory_agent.py)
+**文件**：[`agents/inventory_agent.py`](agents/inventory_agent.py)
 
 **它做什么？**
 
@@ -261,7 +261,7 @@ FORBIDDEN_WORDS = ["最好", "第一", "国家级", "全球首", "绝对", "100%
 
 ### Supervisor 并行编排（Python 核心代码）
 
-**文件**：[`python/orchestrator/supervisor.py`](python/orchestrator/supervisor.py)
+**文件**：[`orchestrator/supervisor.py`](orchestrator/supervisor.py)
 
 ```python
 class SupervisorOrchestrator:
@@ -320,7 +320,7 @@ class SupervisorOrchestrator:
 
 ### A/B 测试引擎（Thompson Sampling）
 
-**文件**：[`python/services/ab_test.py`](python/services/ab_test.py)
+**文件**：[`services/ab_test.py`](services/ab_test.py)
 
 ```python
 class ABTestEngine:
@@ -359,7 +359,7 @@ class ABTestEngine:
 
 ### Agent 基类：重试 + 降级（可靠性保障）
 
-**文件**：[`python/agents/base_agent.py`](python/agents/base_agent.py)
+**文件**：[`agents/base_agent.py`](agents/base_agent.py)
 
 ```python
 class BaseAgent(ABC):
@@ -417,7 +417,7 @@ class BaseAgent(ABC):
 ```bash
 # 1. 克隆项目
 git clone https://github.com/weifu1997/multi-agent-commerce.git
-cd multi-agent-commerce/python
+cd multi-agent-commerce
 
 # 2. 创建虚拟环境（避免依赖冲突）
 python -m venv .venv
@@ -540,6 +540,10 @@ multi-agent-commerce/
 ├── README.md                          # 📄 本文件（项目总览）
 ├── plan.md                            # 📋 完整项目计划（从调研到上线）
 ├── docker-compose.yml                 # 🐳 一键启动所有服务
+├── Dockerfile                         # 🐳 服务容器化
+├── requirements.txt                   # 依赖列表
+├── .env.example                       # 环境变量模板
+├── main.py                            # FastAPI 服务入口
 │
 ├── docs/                              # 📚 面试全套文档
 │   ├── interview-guide.md             # 🎯 面试指南（八股文30题 + STAR法话术）
@@ -548,27 +552,22 @@ multi-agent-commerce/
 │   ├── code-walkthrough.md            # 🔍 代码逐行讲解（面向小白）
 │   └── project-plan.md                # 📋 项目计划总览（调研→实现→发布）
 │
-└── python/                            # 🐍 Python 实现（推荐入门）
-    ├── main.py                        # FastAPI 服务入口
-    ├── requirements.txt               # 依赖列表
-    ├── .env.example                   # 环境变量模板
-    ├── Dockerfile                     # 🐳 Python 服务容器化
-    ├── agents/                        # 4 个 Agent 实现
-    │   ├── base_agent.py              # 基类：重试/超时/降级
-    │   ├── user_profile_agent.py      # 用户画像 Agent
-    │   ├── product_rec_agent.py       # 商品推荐 Agent
-    │   ├── marketing_copy_agent.py    # 营销文案 Agent
-    │   └── inventory_agent.py         # 库存决策 Agent
-    ├── orchestrator/
-    │   ├── supervisor.py              # ⭐ Supervisor 并行编排（核心）
-    │   └── graph.py                   # LangGraph 状态图
-    ├── services/
-    │   ├── ab_test.py                 # A/B 测试引擎（Thompson Sampling）
-    │   ├── feature_store.py           # Redis 实时特征服务
-    │   └── metrics.py                 # Prometheus 监控指标
-    ├── models/schemas.py              # Pydantic 数据模型
-    ├── config/settings.py             # 配置管理
-    └── tests/                         # 单元测试
+├── agents/                            # 4 个 Agent 实现
+│   ├── base_agent.py                  # 基类：重试/超时/降级
+│   ├── user_profile_agent.py          # 用户画像 Agent
+│   ├── product_rec_agent.py           # 商品推荐 Agent
+│   ├── marketing_copy_agent.py        # 营销文案 Agent
+│   └── inventory_agent.py             # 库存决策 Agent
+├── orchestrator/
+│   ├── supervisor.py                  # ⭐ Supervisor 并行编排（核心）
+│   └── graph.py                       # LangGraph 状态图
+├── services/
+│   ├── ab_test.py                     # A/B 测试引擎（Thompson Sampling）
+│   ├── feature_store.py               # Redis 实时特征服务
+│   └── metrics.py                     # Prometheus 监控指标
+├── models/schemas.py                  # Pydantic 数据模型
+├── config/settings.py                 # 配置管理
+└── tests/                             # 单元测试
 ```
 
 ---

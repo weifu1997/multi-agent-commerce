@@ -6,7 +6,7 @@
 
 ## 核心代码讲解
 
-### 1. `python/agents/base_agent.py` — Agent基类
+### 1. `agents/base_agent.py` — Agent基类
 
 **面试考点**: 重试机制、降级策略、模板方法模式
 
@@ -31,7 +31,7 @@ class BaseAgent(ABC):
 
 ---
 
-### 2. `python/agents/user_profile_agent.py` — 用户画像Agent
+### 2. `agents/user_profile_agent.py` — 用户画像Agent
 
 **面试考点**: 实时特征、RFM模型、LLM结构化输出
 
@@ -59,7 +59,7 @@ def _parse_profile(self, user_id, raw):
 
 ---
 
-### 3. `python/agents/product_rec_agent.py` — 商品推荐Agent
+### 3. `agents/product_rec_agent.py` — 商品推荐Agent
 
 **面试考点**: 多路召回、LLM重排、多样性控制
 
@@ -84,7 +84,7 @@ async def _rerank(self, profile, candidates, num_items):
 
 ---
 
-### 4. `python/orchestrator/supervisor.py` — Supervisor编排器
+### 4. `orchestrator/supervisor.py` — Supervisor编排器
 
 **面试考点**: 并行编排、asyncio.gather、结果聚合
 
@@ -123,7 +123,7 @@ asyncio.gather里并行。有依赖的用await串行等待。这样总延迟约�
 
 ---
 
-### 5. `python/services/ab_test.py` — A/B测试引擎
+### 5. `services/ab_test.py` — A/B测试引擎
 
 **面试考点**: 一致性哈希、Thompson Sampling
 
@@ -154,4 +154,4 @@ def assign_thompson(self, user_id, experiment_id):
 ---
 
 > 以上就是本仓库核心代码的逐文件讲解。README 中有架构图与运行步骤，
-> 完整实现见 [`python/`](../python/) 目录。
+> 完整实现见仓库根目录。

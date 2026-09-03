@@ -483,18 +483,18 @@ services:
 
 面试时如果被要求讲解代码,重点讲这几个文件:
 
-### 1. `python/orchestrator/supervisor.py` — 核心编排逻辑
+### 1. `orchestrator/supervisor.py` — 核心编排逻辑
 - asyncio.gather 实现并行
 - 两阶段并行策略
 - 结果聚合和库存过滤
 
-### 2. `python/agents/base_agent.py` — 稳定性保障
+### 2. `agents/base_agent.py` — 稳定性保障
 - 重试机制(指数退避)
 - 超时控制
 - 降级策略
 - 指标收集
 
-### 3. `python/services/ab_test.py` — A/B测试引擎
+### 3. `services/ab_test.py` — A/B测试引擎
 - 一致性哈希分桶
 - Thompson Sampling
 - 指标聚合

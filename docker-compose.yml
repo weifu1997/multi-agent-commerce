@@ -4,7 +4,7 @@ services:
   # Python API Server
   api:
     build:
-      context: ./python
+      context: .
       dockerfile: Dockerfile
     ports:
       - "8000:8000"

@@ -217,19 +217,21 @@ multi-agent-commerce/
 ├── README.md                 # 项目介绍 + 快速开始
 ├── plan.md                   # 完整项目计划（本文件）
 ├── docker-compose.yml        # 一键启动（Redis+Milvus+MySQL）
+├── Dockerfile
+├── requirements.txt
+├── main.py
 ├── docs/
 │   ├── architecture.md       # 架构设计文档
 │   ├── code-walkthrough.md   # 代码逐行讲解
 │   ├── interview-guide.md    # 面试指南（STAR法+八股文）
 │   ├── project-plan.md       # 与 plan.md 同步
 │   └── resume-template.md    # 简历模板
-└── python/                   # Python实现
-    ├── main.py
-    ├── requirements.txt
-    ├── agents/
-    ├── orchestrator/
-    ├── services/
-    └── tests/
+├── agents/
+├── orchestrator/
+├── services/
+├── models/
+├── config/
+└── tests/
 ```
 
 ---
