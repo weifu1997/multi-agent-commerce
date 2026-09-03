@@ -17,9 +17,10 @@
   文案合规率100%(广告法敏感词自动过滤)
 • 设计流量分桶+Thompson Sampling A/B测试引擎,支持Agent/模型/Prompt
   三层实验,推荐CTR提升15%
-• 提供Python(LangGraph)/Java(Spring AI)/Go(goroutine)三语言实现
+• 基于LangGraph状态图实现两阶段并行(画像‖召回 → 重排‖库存 → 文案),
+  提供 /recommend/graph 可视化调用接口,一套Python代码端到端跑通
 
-技术栈: LangGraph · Spring AI · Go · Redis · Milvus · FastAPI · Docker
+技术栈: LangGraph · LangChain · Redis · Milvus · FastAPI · Docker
 ```
 
 ---
@@ -64,7 +65,7 @@
 > - 推荐CTR提升15%,个性化文案点击率比通用文案高23%
 > - 系统端到端延迟P99 < 2s(4个Agent并行执行)
 > - 库存校验后,推荐缺货商品率从12%降至0.5%
-> - 提供了Python/Java/Go三语言实现,方便不同技术栈的团队使用
+> - 一套Python代码从用户理解到个性化文案端到端跑通(含LangGraph可视化),便于讲解与快速验证
 
 ---
 
@@ -223,15 +224,18 @@ vs 传统A/B: Thompson Sampling减少50%实验周期,且不影响统计显著性
 选LangGraph的原因: 需要精确控制并行/串行顺序、状态在Agent间传递、
 以及生产级的checkpoint持久化能力。
 
-**Q12: 三语言实现的技术选型对比?**
+**Q12: asyncio 和真正的多线程并行有什么区别?**
 
-| 维度 | Python (LangGraph) | Java (Spring AI) | Go (goroutine) |
-|------|-------------------|-----------------|----------------|
-| 并行模型 | asyncio.gather | CompletableFuture | goroutine+WaitGroup |
-| 状态管理 | TypedDict | Spring Bean | struct |
-| 序列化 | Pydantic | Jackson | encoding/json |
-| Web框架 | FastAPI | Spring WebFlux | Gin |
-| 适合场景 | AI团队快速迭代 | 企业级Java生态 | 高并发微服务 |
+| 维度 | asyncio (协程) | 多线程 |
+|------|---------------|--------|
+| 调度单位 | 协程(用户态) | 线程(内核态) |
+| 模型 | 单线程 + 事件循环 | 多线程并发 |
+| IO密集 | ✅ 高效 | ✅ 高效 |
+| CPU密集 | ❌ 受GIL限制 | ✅ 真并行 |
+| 线程安全 | 天然安全,无需加锁 | 需加锁/同步 |
+
+本项目是 LLM 调用、Redis 查询这类 IO 密集型任务,`asyncio.gather` 单线程内
+即可高效并行,避免了多线程的锁竞争与上下文切换开销。
 
 ---
 
@@ -495,11 +499,6 @@ services:
 - Thompson Sampling
 - 指标聚合
 
-### 4. `go/orchestrator/supervisor.go` — Go并行实现
-- goroutine + sync.WaitGroup 并行
-- sync.Mutex 保护共享状态
-- 与Python版的对比(goroutine vs asyncio)
-
 ---
 
 ## 六、面试前的准备清单
@@ -513,4 +512,3 @@ services:
 - [ ] 能解释实时特征的Redis数据结构选型
 - [ ] 能对比三个多Agent框架(LangGraph/CrewAI/AutoGen)
 - [ ] 跑通Python版demo,能现场演示
-- [ ] 读懂Go版代码,能解释goroutine并行模型

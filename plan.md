@@ -1,6 +1,6 @@
 ---
 name: 多Agent电商推荐系统
-overview: 构建一个面向面试的企业级多Agent电商推荐与营销系统项目，包含Java/Go/Python三语言实现、配套八股文、简历模板和面试STAR法指南，从零到面试全流程覆盖。
+overview: 构建一个面向面试的企业级多Agent电商推荐与营销系统项目，Python一套实现（LangGraph + FastAPI）、配套八股文、简历模板和面试STAR法指南，从零到面试全流程覆盖。
 todos:
   - id: phase1-python-core
     content: "Phase 1: Python核心骨架 - LangGraph + Supervisor + 4 Agent + MiniMax M2.7接入"
@@ -11,17 +11,11 @@ todos:
   - id: phase3-ab-testing
     content: "Phase 3: A/B测试引擎 + MAB动态调优 + 监控面板"
     status: completed
-  - id: phase4-java
-    content: "Phase 4: Java版实现 - Spring AI Alibaba + Spring Boot 3"
+  - id: phase4-docs
+    content: "Phase 4: 面试全套文档 - 八股文/简历模板/STAR法/代码讲解"
     status: completed
-  - id: phase5-go
-    content: "Phase 5: Go版实现 - LangChainGo + goroutine并行编排"
-    status: completed
-  - id: phase6-docs
-    content: "Phase 6: 面试全套文档 - 八股文/简历模板/STAR法/代码讲解"
-    status: completed
-  - id: phase7-github
-    content: "Phase 7: GitHub发布 - README/CI/CD/Docker一键部署"
+  - id: phase5-github
+    content: "Phase 5: GitHub发布 - README/CI/CD/Docker一键部署"
     status: completed
 isProject: false
 ---
@@ -50,11 +44,11 @@ isProject: false
   - 双Agent推荐（Exploitation + Exploration），Qwen2.5-14B
   - 处理类目公平、卖家覆盖、新品曝光等多目标约束
 
-### 1.2 三大框架对比
+### 1.2 框架选型结论
 
 - **LangGraph（Python，生产首选）**：状态机图架构，原生持久化，human-in-the-loop，适合复杂编排
-- **Spring AI Alibaba（Java，企业首选）**：Tool Calling + Handoffs两种模式，Spring生态无缝集成
-- **go-deepagent / LangChainGo（Go，高并发首选）**：递归多Agent层级，typed state，原生并发
+- 调研中对比过 Java（Spring AI Alibaba）与 Go（LangChainGo）的多 Agent 生态，但对个人学习/面试项目而言，
+  **Python 代码量最少、与 LLM 生态贴合最紧**，一版实现即可讲清全部原理，故本项目只保留 Python/LangGraph。
 
 ### 1.3 行业趋势
 
@@ -118,45 +112,22 @@ graph TB
 
 ---
 
-## 三、三语言实现方案
+## 三、Python实现方案
 
-### 3.1 Python版（推荐入门，代码量最少）
-
-- **框架**：LangGraph + LangChain
-- **LLM**：MiniMax M2.7（通过OpenAI兼容接口）
-- **存储**：Redis（特征）+ Milvus（向量）+ SQLite（业务数据）
+- **框架**：LangGraph + LangChain（Supervisor 并行聚合编排）
+- **LLM**：MiniMax M2.7（OpenAI 兼容接口，可替换为通义/Kimi）
+- **存储**：Redis（实时特征）+ Milvus（向量）+ SQLite（业务数据）
 - **Web**：FastAPI
+- **并行方式**：`asyncio.gather`（IO 密集型任务单线程高效并行）
 - **核心文件结构**：
   - `agents/user_profile_agent.py` - 用户画像Agent
   - `agents/product_rec_agent.py` - 商品推荐Agent
   - `agents/marketing_copy_agent.py` - 营销文案Agent
   - `agents/inventory_agent.py` - 库存决策Agent
   - `orchestrator/supervisor.py` - Supervisor编排器
+  - `orchestrator/graph.py` - LangGraph 状态图
   - `services/ab_test.py` - A/B测试引擎
   - `services/feature_store.py` - 实时特征服务
-
-### 3.2 Java版（企业级，Spring生态）
-
-- **框架**：Spring AI Alibaba + Spring Boot 3
-- **LLM**：MiniMax M2.7
-- **存储**：Redis + Milvus + MySQL
-- **核心模块**：
-  - `agent/` - 四个Agent实现（Spring AI Alibaba Agentic API）
-  - `orchestrator/` - Supervisor编排（Tool Calling模式）
-  - `service/` - 业务服务层
-  - `config/` - MCP服务器配置
-
-### 3.3 Go版（高并发，云原生）
-
-- **框架**：LangChainGo + 自研编排层
-- **LLM**：MiniMax M2.7
-- **存储**：Redis + Milvus + PostgreSQL
-- **亮点**：goroutine并行Agent调用，channel聚合结果
-- **核心模块**：
-  - `agent/` - 四个Agent（接口+实现）
-  - `orchestrator/` - 基于goroutine的并行编排
-  - `handler/` - HTTP Handler
-  - `middleware/` - A/B测试中间件
 
 ---
 
@@ -171,7 +142,7 @@ graph TB
 - 基于Redis实现实时用户特征工程（RFM模型+行为序列），特征更新延迟<100ms
 - 集成MiniMax M2.7实现个性化营销文案生成，基于用户画像动态切换Prompt模板
 - 设计流量分桶A/B测试引擎，支持Agent级别策略对比，推荐CTR提升15%
-- 技术栈：Python/LangGraph | Java/Spring AI Alibaba | Go/LangChainGo
+- 技术栈：Python/LangGraph | FastAPI | Redis | Milvus | Docker
 ```
 
 ### 4.2 STAR法面试话术
@@ -242,31 +213,23 @@ graph TB
 ## 五、项目目录结构
 
 ```
-multi-agent-ecommerce/
+multi-agent-commerce/
 ├── README.md                 # 项目介绍 + 快速开始
+├── plan.md                   # 完整项目计划（本文件）
+├── docker-compose.yml        # 一键启动（Redis+Milvus+MySQL）
 ├── docs/
 │   ├── architecture.md       # 架构设计文档
+│   ├── code-walkthrough.md   # 代码逐行讲解
 │   ├── interview-guide.md    # 面试指南（STAR法+八股文）
-│   ├── resume-template.md    # 简历模板
-│   └── ab-testing.md         # A/B测试设计文档
-├── python/                   # Python实现
-│   ├── requirements.txt
-│   ├── main.py
-│   ├── agents/
-│   ├── orchestrator/
-│   ├── services/
-│   └── tests/
-├── java/                     # Java实现
-│   ├── pom.xml
-│   ├── src/main/java/
-│   └── src/test/java/
-├── go/                       # Go实现
-│   ├── go.mod
-│   ├── cmd/
-│   ├── agent/
-│   ├── orchestrator/
-│   └── handler/
-└── docker-compose.yml        # 一键启动（Redis+Milvus+MySQL）
+│   ├── project-plan.md       # 与 plan.md 同步
+│   └── resume-template.md    # 简历模板
+└── python/                   # Python实现
+    ├── main.py
+    ├── requirements.txt
+    ├── agents/
+    ├── orchestrator/
+    ├── services/
+    └── tests/
 ```
 
 ---
@@ -291,21 +254,13 @@ multi-agent-ecommerce/
 - MAB动态调优
 - Agent调用监控面板
 
-**Phase 4 - Java版实现**
-- Spring AI Alibaba重构
-- Spring Boot 3 + WebFlux
-
-**Phase 5 - Go版实现**
-- LangChainGo + goroutine并行
-- 高并发优化
-
-**Phase 6 - 文档与面试材料**
+**Phase 4 - 文档与面试材料**
 - 详细代码讲解文档
 - 面试八股文合集
 - 简历模板
 - STAR法话术
 
-**Phase 7 - 上传GitHub**
+**Phase 5 - 上传GitHub**
 - README完善
 - CI/CD配置
 - Docker一键部署

@@ -4,7 +4,7 @@
 
 ---
 
-## Python版核心代码讲解
+## 核心代码讲解
 
 ### 1. `python/agents/base_agent.py` — Agent基类
 
@@ -149,57 +149,5 @@ def assign_thompson(self, user_id, experiment_id):
 
 ---
 
-## Go版核心亮点讲解
-
-### `go/orchestrator/supervisor.go` — goroutine并行
-
-```go
-// Go的并行模型: goroutine + sync.WaitGroup
-var wg sync.WaitGroup
-wg.Add(2)
-
-go func() {
-    defer wg.Done()
-    profileResult = s.profileAgent.Run(params)
-    mu.Lock()
-    agentResults["user_profile"] = profileResult
-    mu.Unlock()
-}()
-
-go func() {
-    defer wg.Done()
-    recResult = s.recAgent.Run(params)
-    mu.Lock()
-    agentResults["product_recall"] = recResult
-    mu.Unlock()
-}()
-
-wg.Wait()  // 等待两个goroutine都完成
-```
-
-**面试对比**: 
-- **Python**: `asyncio.gather()` — 协程,单线程异步
-- **Java**: `CompletableFuture.supplyAsync()` — 线程池
-- **Go**: `goroutine + WaitGroup` — M:N调度,最轻量
-
----
-
-## Java版核心亮点讲解
-
-### `java/orchestrator/SupervisorOrchestrator.java` — CompletableFuture并行
-
-```java
-// Java的并行模型: CompletableFuture
-CompletableFuture<AgentResult> profileFuture = 
-    userProfileAgent.runAsync(Map.of("userId", request.getUserId()));
-CompletableFuture<AgentResult> recFuture = 
-    productRecAgent.runAsync(Map.of("numItems", request.getNumItems() * 2));
-
-// join() 阻塞等待结果
-AgentResult profileResult = profileFuture.join();
-AgentResult recResult = recFuture.join();
-```
-
-**面试怎么说**: "Java版使用CompletableFuture实现异步并行,Spring框架
-提供@Async注解简化线程池管理。和Python的asyncio不同,Java是真正的
-多线程并行,适合CPU密集型场景。"
+> 以上就是本仓库核心代码的逐文件讲解。README 中有架构图与运行步骤，
+> 完整实现见 [`python/`](../python/) 目录。

@@ -11,16 +11,6 @@ build/
 .venv/
 venv/
 
-# Java
-target/
-*.class
-*.jar
-.idea/
-*.iml
-
-# Go
-bin/
-
 # Database
 *.db
 *.sqlite3
