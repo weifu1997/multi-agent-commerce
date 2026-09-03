@@ -42,7 +42,7 @@
 
 ### 技术关键词（面试常考）
 
-`Multi-Agent` · `Supervisor模式` · `LangGraph` · `asyncio并行` · `Redis Feature Store` · `A/B Testing` · `Thompson Sampling` · `RAG` · `ReAct` · `MiniMax LLM`
+`Multi-Agent` · `Supervisor模式` · `LangGraph` · `asyncio并行` · `规则/LLM 双路重排` · `A/B Testing` · `Thompson Sampling` · `Redis Feature Store(可选)` · `MiniMax LLM`
 
 ---
 
@@ -107,6 +107,8 @@
               │  商品列表 + 个性化文案 + 实验分组 │
               └─────────────────────────────────┘
 ```
+
+> ℹ️ **依赖说明（诚实版）**：当前仓库默认**不依赖任何外部中间件**即可跑通——召回用内置演示商品表、库存用商品内嵌 `stock` 字段、实时特征退回请求 `context`。Redis（`feature_store.py` 已实现，`ECOM_FEATURE_STORE_ENABLED=true` 启用）、Milvus、MySQL 均为**可选/预留接入点**（见下文技术栈表），`docker-compose` 起的是"下一阶段要接的中间件"，App 本身不强依赖它们。
 
 ### 为什么用 Supervisor 模式？
 
@@ -207,8 +209,8 @@ TEMPLATES = {
     "churn_risk":      "好久不见！{product}为您专属保留，点击领取优惠券",
 }
 
-# 广告法合规校验（过滤违禁词）
-BANNED_WORDS = ["最好", "第一", "最便宜", "绝对", "100%"]
+# 广告法合规校验（过滤违禁词，命中词替换为 ***）
+FORBIDDEN_WORDS = ["最好", "第一", "国家级", "全球首", "绝对", "100%", "永久", "万能", "祖传", "纯天然"]
 ```
 
 ---
@@ -223,7 +225,7 @@ BANNED_WORDS = ["最好", "第一", "最便宜", "绝对", "100%"]
 
 ```python
 # 输入: 推荐商品列表 [P001, P002, P003, ...]
-# 查询 MySQL/WMS 实时库存
+# 读取商品实时库存（演示版=商品内嵌 stock 字段；MySQL/WMS 接入为 Phase2 预留）
 # 输出:
 {
     "available_products": ["P001", "P003"],   # 有货商品
@@ -247,9 +249,9 @@ BANNED_WORDS = ["最好", "第一", "最便宜", "绝对", "100%"]
 | Agent 编排 | LangGraph + 自研 Supervisor 编排器 |
 | Web 服务 | FastAPI + Uvicorn |
 | LLM | MiniMax（OpenAI 兼容接口，可换通义/Kimi 等）|
-| 特征存储 | Redis Sorted Set（滑动窗口实时特征）|
-| 向量检索 | Milvus |
-| 业务数据 | SQLite / MySQL |
+| 特征存储 | Redis Sorted Set（滑动窗口实时特征）— **可选接入**：默认内置演示数据，`ECOM_FEATURE_STORE_ENABLED=true` 即连接 Redis |
+| 向量检索 | Milvus（**预留接入点**；当前演示用内置商品表）|
+| 业务数据 | SQLite / MySQL（**预留接入点**；库存演示用商品内嵌 `stock`）|
 | 并行方式 | `asyncio.gather()` |
 | 启动命令 | `python main.py` |
 
@@ -268,27 +270,35 @@ class SupervisorOrchestrator:
     async def recommend(self, request: RecommendationRequest) -> RecommendationResponse:
         start = time.perf_counter()
 
-        # ① A/B 实验分组（在最开始就决定用哪套策略）
+        # ① A/B 分桶：实验组 config 决定用「规则重排」还是「LLM 重排」
         experiment = self.ab_engine.assign(request.user_id)
+        strategy = (experiment.get("config") or {}).get("rerank", "llm")
 
-        # ② Phase 1：用户画像 + 商品召回 并行执行
+        # ② Phase 1：用户画像 + 商品召回 并行（召回产出候选集）
         profile_result, rec_result = await asyncio.gather(
             self.user_profile_agent.run(user_id=request.user_id, context=request.context),
             self.product_rec_agent.run(user_profile=None, num_items=request.num_items * 2),
         )
-        # asyncio.gather() 让两个 IO 密集型任务同时跑，总耗时 ≈ max(两者耗时)
+        user_profile = getattr(profile_result, "profile", None)
+        candidates = getattr(rec_result, "products", [])   # ← 候选集，喂给下面两步
 
-        # ③ Phase 2：LLM重排 + 库存校验 并行执行
+        # ③ Phase 2：在【同一批候选集】上并行做 重排 + 库存校验
         rerank_result, inventory_result = await asyncio.gather(
-            self.product_rec_agent.run(user_profile=user_profile, num_items=request.num_items),
-            self.inventory_agent.run(products=raw_products),
+            self.product_rec_agent.run(        # 重排只读 candidates，不再内部二次召回
+                user_profile=user_profile,
+                num_items=request.num_items,
+                candidates=candidates,
+                strategy=strategy,
+            ),
+            self.inventory_agent.run(products=candidates),  # 校验对象 = 同一候选集
         )
 
-        # ④ 库存过滤：只保留有货商品
+        # ④ 库存过滤：剔除缺货；不足时用「有货候选」补齐到 num_items，数量稳定
+        ranked = getattr(rerank_result, "products", candidates)
         available_ids = set(getattr(inventory_result, "available_products", []))
-        final_products = [p for p in ranked_products if p.product_id in available_ids]
+        final_products = select_final_products(ranked, available_ids, candidates, request.num_items)
 
-        # ⑤ Phase 3：文案生成（需要前两步结果，所以串行）
+        # ⑤ Phase 3：文案生成（需要最终商品列表，串行）
         copy_result = await self.marketing_copy_agent.run(
             user_profile=user_profile,
             products=final_products,
@@ -298,9 +308,9 @@ class SupervisorOrchestrator:
         total_latency = (time.perf_counter() - start) * 1000
         return RecommendationResponse(
             products=final_products,
-            marketing_copies=copies,
+            marketing_copies=getattr(copy_result, "copies", []),
             experiment_group=experiment.get("group", "control"),
-            total_latency_ms=total_latency,  # 目标 P99 < 2000ms
+            total_latency_ms=total_latency,
         )
 ```
 
@@ -314,35 +324,38 @@ class SupervisorOrchestrator:
 
 ```python
 class ABTestEngine:
-    """
-    流量分桶 + Thompson Sampling 多臂赌博机
-    
-    原理：像赌场里的老虎机，哪台赢的多就多拉哪台。
-    算法自动把更多流量分给表现好的实验组。
-    """
+    """注册实验 → 一致性分桶 → config 真正驱动重排策略"""
 
-    def assign(self, user_id: str) -> dict:
-        # 用户ID哈希取模 → 保证同一用户每次进同一个实验组（一致性）
-        bucket = int(hashlib.md5(user_id.encode()).hexdigest(), 16) % 100
-        
-        if bucket < 60:
-            return {"group": "control", "strategy": "collaborative_filter"}
-        elif bucket < 80:
-            return {"group": "treatment_llm", "strategy": "llm_rerank"}
-        else:
-            return {"group": "treatment_vector", "strategy": "vector_search"}
+    def _init_default_experiments(self):
+        self.register_experiment(Experiment(
+            id="rec_strategy", name="推荐策略实验",
+            groups=[
+                ExperimentGroup(name="control",       weight=50, config={"rerank": "rule_based"}),
+                ExperimentGroup(name="treatment_llm", weight=50, config={"rerank": "llm"}),
+            ],
+        ))
+        # rec_strategy 的 config.rerank 会被 Supervisor 读取并传给 ProductRecAgent：
+        #   rule_based → 确定性规则重排（对照组，无 API Key 也能跑）
+        #   llm        → LLM 精排（实验组）
 
-    def record_click(self, user_id: str, clicked: bool):
-        # Thompson Sampling: 点击了就更新 Beta 分布参数
-        group = self.assignments.get(user_id, "control")
-        if clicked:
-            self.alpha[group] += 1   # 成功次数 +1
-        else:
-            self.beta[group] += 1    # 失败次数 +1
-        # 下次分配流量时，胜率高的组会自动获得更多流量
+    def assign(self, user_id: str, experiment_id: str = "rec_strategy") -> dict:
+        # 稳定哈希：md5(user_id:experiment_id) → 同一用户永远落同一组
+        exp = self.experiments[experiment_id]
+        bucket = int(hashlib.md5(f"{user_id}:{experiment_id}".encode()).hexdigest(), 16) % 100
+        group = self._bucket_to_group(bucket, exp.groups)   # 按 weight 加权落组
+        return {"group": group.name, "config": group.config}
+
+    def assign_thompson(self, user_id: str, experiment_id: str = "rec_strategy") -> dict:
+        # Thompson Sampling：每组从 Beta(successes, failures) 采样，取最大者
+        # → 表现好的组自动获得更多流量（多臂赌博机）
+        exp = self.experiments[experiment_id]
+        best = max(exp.groups, key=lambda g: np.random.beta(g.successes, g.failures))
+        return {"group": best.name, "config": best.config}
 ```
 
 ---
+
+> ℹ️ **A/B 真正接了管线**：Supervisor 在每次请求里读取实验组的 `config.rerank` 去驱动重排算法（control=规则、treatment_llm=LLM），同时有第二个实验 `copy_style`（formal/casual 文案风格）驱动文案 Agent。默认 10% 请求走 `assign_thompson`（探索流量），其余走稳定哈希分桶；`POST /api/v1/experiments/{id}/outcome` 上报结果会更新各组的 Beta 参数，让 Thompson 采样"越赢越多拿流量"。
 
 ### Agent 基类：重试 + 降级（可靠性保障）
 
@@ -350,40 +363,42 @@ class ABTestEngine:
 
 ```python
 class BaseAgent(ABC):
-    """所有 Agent 的基类 — 模板方法模式"""
-    
-    MAX_RETRIES = 3
-    RETRY_DELAY = 1.0  # 秒，指数退避
+    """所有 Agent 的基类 — 模板方法模式（基于 tenacity）"""
+
+    def __init__(self, name: str, timeout: float = 10.0, max_retries: int = 3):
+        self.timeout = timeout        # 单次尝试独立超时（秒）
+        self.max_retries = max_retries
 
     async def run(self, **kwargs) -> AgentResult:
         """公开方法：封装了计时、重试、降级"""
         start = time.perf_counter()
         try:
-            return await self._retry_execute(**kwargs)
+            result = await self._retry_execute(**kwargs)
+            result.latency_ms = (time.perf_counter() - start) * 1000
+            return result
         except Exception as e:
             # 全部重试失败 → 降级（返回默认结果，不影响其他 Agent）
             logger.warning(f"{self.name} fallback triggered: {e}")
-            return self._fallback(**kwargs)
+            return self._fallback(latency_ms=(time.perf_counter() - start) * 1000, exc=e)
 
     async def _retry_execute(self, **kwargs) -> AgentResult:
-        """指数退避重试"""
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                return await asyncio.wait_for(
-                    self._execute(**kwargs),
-                    timeout=self.timeout,  # 每个 Agent 独立超时控制
-                )
-            except asyncio.TimeoutError:
-                if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(self.RETRY_DELAY * (2 ** attempt))  # 1s, 2s, 4s
-        raise RuntimeError(f"{self.name} failed after {self.MAX_RETRIES} retries")
+        @retry(
+            stop=stop_after_attempt(self.max_retries),           # 最多 3 次
+            wait=wait_exponential(multiplier=0.5, min=0.5, max=4),  # 退避 0.5s→1.0s→2.0s
+            reraise=True,
+        )
+        async def _inner():
+            # 每次尝试独立超时：单个 Agent 卡死不阻塞整体
+            return await asyncio.wait_for(self._execute(**kwargs), timeout=self.timeout)
+
+        return await _inner()
 
     @abstractmethod
     async def _execute(self, **kwargs) -> AgentResult:
         """子类只需实现这个方法，写业务逻辑即可"""
 ```
 
-> 💡 **小白解读**：就像打电话打不通会重拨，第1次立刻重拨，第2次等2秒，第3次等4秒（指数退避）。如果全失败了，就返回一个"说得过去的默认结果"（降级），保证整个系统不崩溃。
+> 💡 **小白解读**：就像打电话打不通会重拨——每次尝试都有超时上限（每个 Agent 可配 5~10s），失败后按 0.5s→1s→2s 指数退避重试，最多 3 次。如果全失败了，就返回一个"说得过去的默认结果"（降级），保证整个系统不崩溃。
 
 ---
 
@@ -629,15 +644,19 @@ multi-agent-commerce/
 
 ### Q5：A/B 测试的流量分桶怎么保证一致性？
 
-> ```python
-> # 用 MD5 哈希取模 → 同一个 user_id 每次落到同一个桶
-> bucket = int(hashlib.md5(user_id.encode()).hexdigest(), 16) % 100
+> 本项目用「实验 ID + 用户 ID」一起哈希，保证同一用户在同一实验里永远落同一个组：
 >
-> # 0-59  → control（60%流量）
-> # 60-79 → treatment_llm（20%流量）
-> # 80-99 → treatment_vector（20%流量）
+> ```python
+> # key 里带上 experiment_id，不同实验互不干扰
+> bucket = int(hashlib.md5(f"{user_id}:{experiment_id}".encode()).hexdigest(), 16) % 100
+> group = self._bucket_to_group(bucket, exp.groups)   # 按 weight 加权落组
 > ```
-> 只要 user_id 不变，分桶结果永远一致。这样同一个用户在实验期间始终体验同一套策略，保证实验结论的可靠性。
+>
+> 默认 `rec_strategy` 实验 2 个组、各 50%：
+> - `control`       → config `{"rerank": "rule_based"}`（规则重排）
+> - `treatment_llm` → config `{"rerank": "llm"}`（LLM 精排）
+>
+> 只要 user_id 不变，分桶结果永远一致，同一个用户在实验期间始终体验同一套策略。
 
 ---
 
@@ -646,24 +665,22 @@ multi-agent-commerce/
 > 核心思想：哪个实验组赢得多，就自动给它更多流量（像"站在赢家那边"）。
 >
 > ```python
-> # 每个实验组维护 Beta 分布参数
-> alpha = {"control": 100, "treatment": 80}   # 点击次数
-> beta  = {"control": 50,  "treatment": 20}   # 未点击次数
->
+> # 每个组维护 Beta 分布参数（successes / failures，见 record_outcome）
 > # 分配流量时，从各组的 Beta 分布采样，取最大值的组
-> samples = {group: np.random.beta(alpha[g], beta[g]) for g in groups}
-> winner = max(samples, key=samples.get)
+> best = max(exp.groups, key=lambda g: np.random.beta(g.successes, g.failures))
 > # CTR 越高的组，采样值越大，被选中概率越高
 > ```
+>
+> Supervisor 默认让 10% 请求走 `assign_thompson`（探索流量），其余走稳定哈希分桶；点击/转化结果通过接口回传后，胜率高的组会自动获得更多流量。
 
 ---
 
 ### Q7：Agent 调用失败怎么处理？
 
 > 三层保障：
-> 1. **超时控制**：`asyncio.wait_for(coro, timeout=5)` — 每个 Agent 独立超时，不阻塞整体
-> 2. **指数退避重试**：失败后等 1s → 2s → 4s 重试，共 3 次
-> 3. **降级（Fallback）**：全部重试失败后，返回"说得过去的默认结果"（如热门商品列表），保证整个系统不崩溃
+> 1. **超时控制**：`asyncio.wait_for(self._execute(), timeout=self.timeout)` — 每个 Agent 单次尝试独立超时（可配 5~10s），卡死不阻塞整体
+> 2. **指数退避重试**（tenacity）：失败后按 0.5s → 1s → 2s 退避，最多 3 次
+> 3. **降级（Fallback）**：全部重试失败后，返回"说得过去的默认结果"（`success=False` 的空结果），保证整个系统不崩溃
 
 ---
 
@@ -718,17 +735,17 @@ multi-agent-commerce/
 • 设计并实现基于 Supervisor 模式的多 Agent 协同架构，含用户画像、商品推荐、
   营销文案、库存决策 4 个专业 Agent，采用并行分发+聚合的编排模式
 
-• 基于 Redis Sorted Set 实现实时用户特征工程（RFM 模型+行为序列），
-  特征更新延迟 < 100ms，支持 1h/24h/7d 多时间窗口滑动计算
+• 实现实时用户特征工程（RFM 模型 + 1h/24h/7d 行为滑动窗口），默认内置演示
+  数据离线可跑通，开启 ECOM_FEATURE_STORE_ENABLED 即接入 Redis Sorted Set
 
 • 集成 LLM 实现个性化营销文案生成，基于用户画像动态切换 5 套 Prompt 模板，
-  文案合规率 100%（广告法敏感词自动过滤）
+  广告法违禁词自动过滤，另按 copy_style 实验组切换 formal/casual 风格
 
-• 设计流量分桶 + Thompson Sampling A/B 测试引擎，支持 Agent/模型/Prompt
-  三层实验，推荐 CTR 提升 15%，文案点击率提升 23%
+• 设计哈希分桶 + Thompson Sampling A/B 引擎，实验组 config 真实驱动管线分支
+  （rule_based vs LLM 重排 / formal vs casual 文案），10% 请求走动态调流
 
-• 基于 LangGraph 状态图实现两阶段并行（画像‖召回 → 重排‖库存 → 文案），
-  并提供 /recommend/graph 可视化调用接口，一套 Python 代码端到端跑通
+• 基于 LangGraph 状态图实现"召回候选集 → 重排‖库存(同批候选) → 文案"两阶段
+  并行，并提供 /recommend/graph 可视化调用接口，一套 Python 代码端到端跑通
 
 技术栈：LangGraph · LangChain · Redis · Milvus · FastAPI · Docker
 ```

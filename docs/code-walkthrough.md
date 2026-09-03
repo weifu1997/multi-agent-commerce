@@ -97,13 +97,17 @@ async def recommend(self, request):
     )
     # 为什么可以并行? 因为画像和召回互不依赖
     
-    # Phase 2: 并行执行LLM重排 + 库存校验
+    # Phase 1 产出的候选集,喂给下面两步(关键: 重排只读候选集,不再内部二次召回)
+    candidates = getattr(rec_result, "products", [])
+
+    # Phase 2: 在【同一批候选集】上并行执行 重排 + 库存校验
     rerank_result, inventory_result = await asyncio.gather(
-        self.product_rec_agent.run(user_profile=user_profile, ...),
-        self.inventory_agent.run(products=raw_products),
+        self.product_rec_agent.run(user_profile=user_profile, num_items=...,
+                                   candidates=candidates, strategy=...),
+        self.inventory_agent.run(products=candidates),   # 校验对象与重排同一批
     )
     # 重排需要画像(Phase 1的结果),但不需要库存结果
-    # 库存检查需要商品列表,但不需要排序结果
+    # 库存检查与重排都只依赖候选集,互不依赖对方结果
     # 所以可以并行!
     
     # Phase 3: 聚合 + 文案生成(串行,因为依赖前两步)

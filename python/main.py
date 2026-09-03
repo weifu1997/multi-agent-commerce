@@ -29,6 +29,7 @@ from models.schemas import RecommendationRequest, RecommendationResponse
 from orchestrator.supervisor import SupervisorOrchestrator
 from orchestrator.graph import build_recommendation_graph
 from services.ab_test import ABTestEngine
+from services.feature_store import FeatureStore
 from services.metrics import MetricsCollector
 
 logger = structlog.get_logger()
@@ -45,6 +46,20 @@ rec_graph = None
 async def lifespan(app: FastAPI):
     global rec_graph
     rec_graph = build_recommendation_graph()
+
+    # 可选接入 Redis Feature Store：ECOM_FEATURE_STORE_ENABLED=true 时启用。
+    # 连不上不阻塞启动（UserProfileAgent 内部会自动退回 context 演示数据）。
+    if settings.feature_store_enabled:
+        try:
+            import redis.asyncio as aioredis
+
+            client = aioredis.from_url(settings.redis_url, decode_responses=True)
+            await client.ping()
+            supervisor.user_profile_agent.feature_store = FeatureStore(redis_client=client)
+            logger.info("feature_store.connected", url=settings.redis_url)
+        except Exception as exc:  # noqa: BLE001 - 降级而非崩溃
+            logger.warning("feature_store.unavailable", error=str(exc))
+
     logger.info("app.startup", model=settings.llm_model)
     yield
     logger.info("app.shutdown")

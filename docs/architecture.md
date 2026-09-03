@@ -46,10 +46,10 @@
 
 | Agent | 核心职责 | 输入 | 输出 | 工具/数据源 | 超时 |
 |-------|---------|------|------|-----------|------|
-| 用户画像 | 实时特征+RFM+分群 | user_id | UserProfile | Redis Feature Store | 5s |
-| 商品推荐 | 多路召回+LLM重排 | UserProfile, num_items | Product[] | Milvus, LLM | 8s |
-| 营销文案 | 模板选择+LLM生成+合规 | UserProfile, Product[] | Copy[] | LLM | 10s |
-| 库存决策 | 库存校验+预警+限购 | Product[] | available_ids, alerts | MySQL/WMS | 5s |
+| 用户画像 | 实时特征+RFM+分群 | user_id | UserProfile | Redis Feature Store *(可选接入,默认 context 演示数据)* | 5s |
+| 商品推荐 | 召回→候选集→重排(rule/LLM) | UserProfile, num_items, candidates | Product[] | 内置演示商品表 + LLM *(Milvus 为预留接入点)* | 8s |
+| 营销文案 | 模板选择+LLM生成+合规 | UserProfile, Product[], style | Copy[] | LLM | 10s |
+| 库存决策 | 库存校验+预警+限购 | Product[] | available_ids, alerts | 商品内嵌 stock(演示) *(MySQL/WMS 为预留)* | 5s |
 
 ## 3. 数据流
 
@@ -64,7 +64,7 @@ Redis (Feature Store)          Milvus (向量库)         MySQL (业务数据)
             结果聚合器 ◄────────────────────────────────────┘
                   │
                   ▼
-            营销文案Agent → LLM (MiniMax M2.7)
+            营销文案Agent → LLM (MiniMax-M1)
                   │
                   ▼
             A/B测试引擎

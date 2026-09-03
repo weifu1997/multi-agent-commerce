@@ -1,7 +1,7 @@
 """
 营销文案Agent
 - Prompt模板引擎：基于用户画像动态选择模板(新客/老客/高价值)
-- 个性化生成：调用MiniMax M2.7生成文案
+- 个性化生成：调用 MiniMax 等 OpenAI 兼容接口生成文案（style 变体由 A/B 实验组控制）
 - 合规校验：敏感词过滤 + 广告法合规检查
 """
 
@@ -75,12 +75,17 @@ class MarketingCopyAgent(BaseAgent):
     async def _execute(self, **kwargs: Any) -> MarketingCopyResult:
         user_profile: UserProfile | None = kwargs.get("user_profile")
         products: list[Product] = kwargs.get("products", [])
+        style: str = kwargs.get("style", "")  # 来自 copy_style 实验组：formal / casual / ""
 
         if not products:
             return MarketingCopyResult(success=True, copies=[], confidence=1.0)
 
         template_key = self._select_template(user_profile)
-        system_prompt = PROMPT_TEMPLATES[template_key]
+        style_hint = {
+            "formal": "语气正式克制，突出专业品质，避免口语化。",
+            "casual": "语气轻松口语化，像朋友种草，可适当用语气词。",
+        }.get(style, "")
+        system_prompt = PROMPT_TEMPLATES[template_key] + style_hint
 
         product_info = "\n".join(
             f"- ID:{p.product_id} 名称:{p.name} 类目:{p.category} 价格:¥{p.price} 标签:{','.join(p.tags)}"

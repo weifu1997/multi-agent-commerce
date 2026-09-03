@@ -66,6 +66,9 @@ class ABTestEngine:
                 ],
             )
         )
+        # 说明：rec_strategy 实验的 config.rerank 会被 Supervisor 读取并驱动
+        # ProductRecAgent 走 rule_based（确定性排序）或 llm（LLM 精排）分支；
+        # copy_style 实验的 config.style 会驱动 MarketingCopyAgent 的文案风格。
 
     def register_experiment(self, exp: Experiment):
         self.experiments[exp.id] = exp

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -15,7 +16,7 @@ logger = structlog.get_logger()
 class BaseAgent(ABC):
     """All agents inherit from this base class with retry, timeout, and fallback."""
 
-    def __init__(self, name: str, timeout: float = 10.0, max_retries: int = 2):
+    def __init__(self, name: str, timeout: float = 10.0, max_retries: int = 3):
         self.name = name
         self.timeout = timeout
         self.max_retries = max_retries
@@ -53,7 +54,8 @@ class BaseAgent(ABC):
             reraise=True,
         )
         async def _inner():
-            return await self._execute(**kwargs)
+            # 每次尝试都有独立超时：单 Agent 卡死不阻塞整体（P99 < 2s 的保障之一）
+            return await asyncio.wait_for(self._execute(**kwargs), timeout=self.timeout)
 
         return await _inner()
 

@@ -1,8 +1,8 @@
 """
 用户画像Agent
-- 实时特征提取：浏览/点击/购买/收藏行为 -> Redis Feature Store
-- 用户分群：RFM模型 + 实时标签
-- 画像合并：离线标签(T+1) + 在线标签(实时)
+- 实时特征提取：开启 ECOM_FEATURE_STORE_ENABLED 时从 Redis Feature Store 读行为特征
+- 用户分群：RFM模型 + 实时标签（默认退回请求 context 中的演示数据，离线可跑）
+- 画像合并：离线标签(T+1) + 在线标签(实时)（预留）
 """
 
 from __future__ import annotations

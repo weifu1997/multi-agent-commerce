@@ -13,7 +13,9 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
 
-    # Redis
+    # Redis Feature Store（可选接入：开启后 UserProfileAgent 从 Redis 读实时特征，
+    # 关闭则退回请求 context 里的演示数据 —— 无外部依赖也能跑通）
+    feature_store_enabled: bool = False
     redis_url: str = "redis://localhost:6379/0"
     feature_ttl_seconds: int = 86400
 

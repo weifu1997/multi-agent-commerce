@@ -27,6 +27,8 @@ from agents import (
 from models.schemas import Product, UserProfile
 from services.ab_test import ABTestEngine
 
+from .supervisor import select_final_products
+
 
 class PipelineState(TypedDict, total=False):
     request_id: str
@@ -35,6 +37,8 @@ class PipelineState(TypedDict, total=False):
     num_items: int
     context: dict[str, Any]
     experiment_group: str
+    rerank_strategy: str  # rule_based / llm，来自 A/B 实验组 config
+    copy_style: str       # formal / casual，来自 copy_style 实验组 config
 
     user_profile: UserProfile | None
     raw_products: list[Product]
@@ -59,8 +63,12 @@ async def init_node(state: PipelineState) -> PipelineState:
     state["request_id"] = str(uuid.uuid4())
     state["_start_time"] = time.perf_counter()
     state["agent_results"] = {}
-    exp = ab_engine.assign(state["user_id"])
+    # A/B 分桶：rec_strategy 组决定 rule_based / llm 重排策略
+    exp = ab_engine.assign(state["user_id"], "rec_strategy")
     state["experiment_group"] = exp.get("group", "control")
+    state["rerank_strategy"] = (exp.get("config") or {}).get("rerank", "llm")
+    copy_exp = ab_engine.assign(state["user_id"], "copy_style")
+    state["copy_style"] = (copy_exp.get("config") or {}).get("style", "")
     return state
 
 
@@ -96,9 +104,12 @@ async def parallel_phase1(state: PipelineState) -> PipelineState:
 
 
 async def rerank_node(state: PipelineState) -> PipelineState:
+    # 重排只读候选集（raw_products），不再内部二次召回
     result = await product_rec_agent.run(
         user_profile=state.get("user_profile"),
         num_items=state.get("num_items", 10),
+        candidates=state.get("raw_products", []),
+        strategy=state.get("rerank_strategy", "auto"),
     )
     state["ranked_products"] = getattr(result, "products", state.get("raw_products", []))
     state["agent_results"]["rerank"] = result
@@ -129,10 +140,10 @@ async def filter_node(state: PipelineState) -> PipelineState:
     ranked = state.get("ranked_products", [])
     avail = state.get("available_ids", set())
     num = state.get("num_items", 10)
-    final = [p for p in ranked if p.product_id in avail]
+    final = select_final_products(ranked, avail, state.get("raw_products", []), num)
     if not final:
-        final = ranked
-    state["final_products"] = final[:num]
+        final = ranked[:num]
+    state["final_products"] = final
     return state
 
 
@@ -140,6 +151,7 @@ async def marketing_copy_node(state: PipelineState) -> PipelineState:
     result = await marketing_copy_agent.run(
         user_profile=state.get("user_profile"),
         products=state.get("final_products", []),
+        style=state.get("copy_style", ""),
     )
     state["marketing_copies"] = getattr(result, "copies", [])
     state["agent_results"]["marketing_copy"] = result

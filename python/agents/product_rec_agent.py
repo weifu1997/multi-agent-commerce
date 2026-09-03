@@ -1,8 +1,8 @@
 """
 商品推荐Agent
-- 召回层：协同过滤 + 向量检索(Milvus) + 热度/新品策略
-- 排序层：LLM重排 + 特征交叉(用户画像 x 商品属性)
-- 多样性控制：类目打散、卖家去重、新品加权
+- 召回层：产出候选集（演示为内置商品表排序；协同过滤/向量检索(Milvus)为预留策略）
+- 重排层：可传入候选集做 rule_based / llm 双路重排（策略由 A/B 实验组决定）
+- 关键：给定 candidates 时只做重排、不二次召回；结果保证 ⊆ 候选集
 """
 
 from __future__ import annotations
@@ -54,6 +54,8 @@ MOCK_PRODUCTS = [
     Product(product_id="P013", name="Apple Watch Ultra 3", category="穿戴", price=5999, brand="Apple", seller_id="S01", stock=200, tags=["运动", "健康"]),
     Product(product_id="P014", name="大疆Mini 4 Pro", category="无人机", price=4788, brand="大疆", seller_id="S11", stock=100, tags=["航拍", "便携"]),
     Product(product_id="P015", name="Switch 2", category="游戏机", price=2499, brand="Nintendo", seller_id="S12", stock=50, tags=["新品", "游戏"]),
+    # 缺货示例品：若被召回，库存 Agent 会把它从推荐中剔除（验证"缺货自动过滤"）
+    Product(product_id="P016", name="Apple Vision Pro", category="穿戴", price=32999, brand="Apple", seller_id="S01", stock=0, tags=["新品", "旗舰"]),
 ]
 
 
@@ -75,28 +77,52 @@ class ProductRecAgent(BaseAgent):
 
     async def _execute(self, **kwargs: Any) -> ProductRecResult:
         user_profile: UserProfile | None = kwargs.get("user_profile")
-        num_items: int = kwargs.get("num_items", 10)
+        num_items: int = int(kwargs.get("num_items", 10))
+        strategy: str = (kwargs.get("strategy") or "auto").lower()
 
-        candidates = await self._recall(user_profile, num_items * 3)
-        ranked_ids = await self._rerank(user_profile, candidates, num_items)
+        # 召回层：默认内部召回；编排器可显式传入上一阶段的候选集（candidates），
+        # 避免"召回结果被丢弃、重排重新召回一遍"的数据流错位。
+        candidates: list[Product] = kwargs.get("candidates")
+        if candidates is None:
+            candidates = await self._recall(user_profile, num_items * 3)
 
-        id_to_product = {p.product_id: p for p in candidates}
-        final_products = []
-        for pid in ranked_ids:
-            if pid in id_to_product:
-                final_products.append(id_to_product[pid])
-        if len(final_products) < num_items:
-            for p in candidates:
-                if p.product_id not in ranked_ids:
-                    final_products.append(p)
-                    if len(final_products) >= num_items:
-                        break
+        if not candidates:
+            return ProductRecResult(
+                success=True,
+                products=[],
+                recall_strategy="rule_based",
+                data={"candidate_count": 0, "reranked": 0},
+                confidence=0.8,
+            )
+
+        # 重排层：rule_based / llm 由 A/B 实验组 config 决定（见 supervisor）。
+        # 仅当显式要求 llm（或 auto 且已有画像）时才调用 LLM；否则走确定性规则，
+        # 这样 control 组在无 API Key 的环境下也能稳定跑通。
+        use_llm = strategy in ("llm", "auto") and user_profile is not None
+        if use_llm:
+            ordered = await self._rerank_llm(user_profile, candidates)
+        else:
+            ordered = self._rerank_rule(user_profile, candidates)
+
+        # 保证：结果 ⊆ candidates、无重复、数量 == min(num_items, len(candidates))
+        chosen: list[Product] = []
+        for p in ordered:
+            if p.product_id in {x.product_id for x in chosen}:
+                continue
+            chosen.append(p)
+            if len(chosen) >= num_items:
+                break
+        for p in self._rerank_rule(user_profile, candidates):  # 用规则序兜底补齐
+            if len(chosen) >= num_items:
+                break
+            if p.product_id not in {x.product_id for x in chosen}:
+                chosen.append(p)
 
         return ProductRecResult(
             success=True,
-            products=final_products[:num_items],
+            products=chosen[:num_items],
             recall_strategy="collaborative_filter+vector+hot",
-            data={"candidate_count": len(candidates), "reranked": len(ranked_ids)},
+            data={"candidate_count": len(candidates), "reranked": len(chosen)},
             confidence=0.8,
         )
 
@@ -115,12 +141,34 @@ class ProductRecAgent(BaseAgent):
 
         return candidates[:limit]
 
-    async def _rerank(
-        self, profile: UserProfile | None, candidates: list[Product], num_items: int
-    ) -> list[str]:
-        if not profile:
-            return [p.product_id for p in candidates[:num_items]]
+    @staticmethod
+    def _score(product: Product, profile: UserProfile | None) -> float:
+        """Deterministic rule-based relevance score (A/B control 组使用)."""
+        score = 0.0
+        if profile:
+            if profile.preferred_categories and product.category in profile.preferred_categories:
+                score += 3.0
+            lo, hi = profile.price_range
+            if lo <= product.price <= hi:
+                score += 2.0
+        if "新品" in product.tags:
+            score += 0.5
+        if "旗舰" in product.tags:
+            score += 0.5
+        return score
 
+    def _rerank_rule(
+        self, profile: UserProfile | None, candidates: list[Product]
+    ) -> list[Product]:
+        """Stable sort by score; ties keep original recall order."""
+        scored = [(self._score(p, profile), i, p) for i, p in enumerate(candidates)]
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [p for _, _, p in scored]
+
+    async def _rerank_llm(
+        self, profile: UserProfile, candidates: list[Product]
+    ) -> list[Product]:
+        """LLM re-rank over the provided candidate list (only reads candidates, never re-recalls)."""
         profile_summary = {
             "segments": [s.value for s in profile.segments],
             "preferred_categories": profile.preferred_categories,
@@ -131,7 +179,7 @@ class ProductRecAgent(BaseAgent):
             for p in candidates
         ]
         prompt = RERANK_PROMPT.format(
-            num_items=num_items,
+            num_items=len(candidates),
             user_profile=json.dumps(profile_summary, ensure_ascii=False),
             candidates=json.dumps(candidate_summary, ensure_ascii=False),
         )
@@ -144,6 +192,13 @@ class ProductRecAgent(BaseAgent):
             raw = response.content.strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(raw)
+            llm_ids = json.loads(raw)
         except (json.JSONDecodeError, IndexError):
-            return [p.product_id for p in candidates[:num_items]]
+            llm_ids = []
+
+        by_id = {p.product_id: p for p in candidates}
+        ordered = [by_id[pid] for pid in llm_ids if pid in by_id]
+        # 补充 LLM 漏掉的候选，保证总能产出 num_items 个
+        ordered += [p for p in self._rerank_rule(profile, candidates)
+                    if p.product_id not in {x.product_id for x in ordered}]
+        return ordered
