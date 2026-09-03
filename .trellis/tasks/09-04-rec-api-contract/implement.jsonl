@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index for API/orchestrator work"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "404/503 HTTP error mapping for outcome and uninitialized graph"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "HTTP serialization is a schema↔FastAPI↔frontend contract boundary"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Share assign_pipeline between Supervisor and Graph instead of duplicating A/B logic"}
