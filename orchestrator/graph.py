@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from datetime import datetime
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -24,7 +25,7 @@ from agents import (
     ProductRecAgent,
     UserProfileAgent,
 )
-from models.schemas import Product, UserProfile
+from models.schemas import Product, RecommendationResponse, UserProfile
 from services.ab_test import ABTestEngine
 
 from .supervisor import select_final_products
@@ -37,6 +38,7 @@ class PipelineState(TypedDict, total=False):
     num_items: int
     context: dict[str, Any]
     experiment_group: str
+    experiments: dict[str, Any]
     rerank_strategy: str  # rule_based / llm，来自 A/B 实验组 config
     copy_style: str       # formal / casual，来自 copy_style 实验组 config
 
@@ -56,20 +58,23 @@ user_profile_agent = UserProfileAgent()
 product_rec_agent = ProductRecAgent()
 marketing_copy_agent = MarketingCopyAgent()
 inventory_agent = InventoryAgent()
-ab_engine = ABTestEngine()
 
 
-async def init_node(state: PipelineState) -> PipelineState:
-    state["request_id"] = str(uuid.uuid4())
-    state["_start_time"] = time.perf_counter()
-    state["agent_results"] = {}
-    # A/B 分桶：rec_strategy 组决定 rule_based / llm 重排策略
-    exp = ab_engine.assign(state["user_id"], "rec_strategy")
-    state["experiment_group"] = exp.get("group", "control")
-    state["rerank_strategy"] = (exp.get("config") or {}).get("rerank", "llm")
-    copy_exp = ab_engine.assign(state["user_id"], "copy_style")
-    state["copy_style"] = (copy_exp.get("config") or {}).get("style", "")
-    return state
+def _make_init_node(engine: ABTestEngine, thompson_prob: float):
+    async def init_node(state: PipelineState) -> PipelineState:
+        state["request_id"] = str(uuid.uuid4())
+        state["_start_time"] = time.perf_counter()
+        state["agent_results"] = {}
+        assignments = engine.assign_pipeline(state["user_id"], thompson_prob)
+        rec = assignments["rec_strategy"]
+        copy = assignments["copy_style"]
+        state["experiments"] = assignments
+        state["experiment_group"] = rec.get("group", "control")
+        state["rerank_strategy"] = (rec.get("config") or {}).get("rerank", "llm")
+        state["copy_style"] = (copy.get("config") or {}).get("style", "")
+        return state
+
+    return init_node
 
 
 async def user_profile_node(state: PipelineState) -> PipelineState:
@@ -112,7 +117,7 @@ async def rerank_node(state: PipelineState) -> PipelineState:
         strategy=state.get("rerank_strategy", "auto"),
     )
     state["ranked_products"] = getattr(result, "products", state.get("raw_products", []))
-    state["agent_results"]["rerank"] = result
+    state["agent_results"]["product_rec"] = result
     return state
 
 
@@ -163,11 +168,36 @@ async def aggregate_node(state: PipelineState) -> PipelineState:
     return state
 
 
-def build_recommendation_graph() -> StateGraph:
+def graph_state_to_response(state: PipelineState) -> RecommendationResponse:
+    """Map graph state onto the Supervisor RecommendationResponse contract."""
+    experiments = state.get("experiments") or {}
+    rec = experiments.get("rec_strategy") or {}
+    if hasattr(rec, "group"):
+        rec_group = rec.group
+    else:
+        rec_group = rec.get("group") or state.get("experiment_group", "control")
+    return RecommendationResponse(
+        request_id=state.get("request_id") or "",
+        user_id=state.get("user_id") or "",
+        products=list(state.get("final_products") or []),
+        marketing_copies=list(state.get("marketing_copies") or []),
+        experiment_group=rec_group,
+        experiments=experiments,
+        agent_results=dict(state.get("agent_results") or {}),
+        total_latency_ms=float(state.get("total_latency_ms") or 0.0),
+        timestamp=datetime.now(),
+    )
+
+
+def build_recommendation_graph(
+    ab_engine: ABTestEngine | None = None,
+    thompson_prob: float = 0.1,
+):
     """Build and compile the LangGraph state graph."""
+    engine = ab_engine or ABTestEngine()
     graph = StateGraph(PipelineState)
 
-    graph.add_node("init", init_node)
+    graph.add_node("init", _make_init_node(engine, thompson_prob))
     graph.add_node("parallel_phase1", parallel_phase1)
     graph.add_node("parallel_phase2", parallel_phase2)
     graph.add_node("filter", filter_node)

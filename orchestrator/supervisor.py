@@ -20,10 +20,8 @@ Supervisor编排器 — 并行分发 + 聚合模式
 from __future__ import annotations
 
 import asyncio
-import random
 import time
 import uuid
-from typing import Any
 
 import structlog
 
@@ -34,6 +32,7 @@ from agents import (
     UserProfileAgent,
 )
 from models.schemas import (
+    ExperimentAssignment,
     Product,
     RecommendationRequest,
     RecommendationResponse,
@@ -103,12 +102,11 @@ class SupervisorOrchestrator:
         )
 
         # A/B 分流：rec_strategy 实验组决定用 rule_based 还是 llm 重排
-        experiment = self._assign_rec_experiment(request.user_id)
-        rerank_strategy = (experiment.get("config") or {}).get("rerank", "llm")
-
-        # copy_style 实验组决定文案风格变体（formal / casual / 空=按分群默认）
-        copy_exp = self.ab_engine.assign(request.user_id, "copy_style")
-        copy_style = (copy_exp.get("config") or {}).get("style", "")
+        assignments = self.ab_engine.assign_pipeline(request.user_id, self.thompson_prob)
+        rec_assignment = assignments["rec_strategy"]
+        copy_assignment = assignments["copy_style"]
+        rerank_strategy = (rec_assignment.get("config") or {}).get("rerank", "llm")
+        copy_style = (copy_assignment.get("config") or {}).get("style", "")
 
         # Phase 1: parallel — user profile + product recall（产出候选集）
         profile_result, rec_result = await asyncio.gather(
@@ -169,7 +167,11 @@ class SupervisorOrchestrator:
             user_id=request.user_id,
             products=final_products,
             marketing_copies=copies,
-            experiment_group=experiment.get("group", "control"),
+            experiment_group=rec_assignment.get("group", "control"),
+            experiments={
+                "rec_strategy": ExperimentAssignment(**rec_assignment),
+                "copy_style": ExperimentAssignment(**copy_assignment),
+            },
             agent_results={
                 "user_profile": profile_result,
                 "product_recall": rec_result,
@@ -179,9 +181,3 @@ class SupervisorOrchestrator:
             },
             total_latency_ms=total_latency,
         )
-
-    def _assign_rec_experiment(self, user_id: str) -> dict[str, Any]:
-        """稳定哈希分桶为主，小概率走 Thompson Sampling 动态分配流量。"""
-        if random.random() < self.thompson_prob:
-            return self.ab_engine.assign_thompson(user_id, "rec_strategy")
-        return self.ab_engine.assign(user_id, "rec_strategy")

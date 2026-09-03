@@ -70,10 +70,71 @@ def test_metrics_recording():
     assert stats["control"]["ctr"]["count"] == 2
 
 
+def test_assign_pipeline_hash_only_when_thompson_prob_zero():
+    engine = ABTestEngine()
+    result = engine.assign_pipeline("user_001", thompson_prob=0.0)
+    assert result["rec_strategy"]["assign"] == "hash"
+    assert result["copy_style"]["assign"] == "hash"
+    assert result["rec_strategy"]["group"] == engine.assign("user_001", "rec_strategy")["group"]
+    assert result["copy_style"]["group"] == engine.assign("user_001", "copy_style")["group"]
+
+
+def test_assign_pipeline_thompson_when_prob_one():
+    engine = ABTestEngine()
+    result = engine.assign_pipeline("user_001", thompson_prob=1.0)
+    assert result["rec_strategy"]["assign"] == "thompson"
+    assert result["copy_style"]["assign"] == "hash"
+
+
+def test_outcome_unknown_ids_return_404_and_valid_pair_records():
+    from fastapi.testclient import TestClient
+
+    import main as main_mod
+
+    with TestClient(main_mod.app) as client:
+        missing_exp = client.post(
+            "/api/v1/experiments/no_such/outcome?group=control&success=true"
+        )
+        assert missing_exp.status_code == 404
+
+        missing_group = client.post(
+            "/api/v1/experiments/rec_strategy/outcome?group=no_such&success=true"
+        )
+        assert missing_group.status_code == 404
+
+        control = next(
+            g for g in main_mod.ab_engine.experiments["rec_strategy"].groups if g.name == "control"
+        )
+        before = control.successes
+        ok = client.post(
+            "/api/v1/experiments/rec_strategy/outcome?group=control&success=true"
+        )
+        assert ok.status_code == 200
+        assert ok.json() == {"status": "recorded"}
+        assert control.successes == before + 1
+
+
+def test_graph_uninitialized_returns_503():
+    from fastapi.testclient import TestClient
+
+    import main as main_mod
+
+    with TestClient(main_mod.app) as client:
+        original = main_mod.rec_graph
+        main_mod.rec_graph = None
+        try:
+            resp = client.post("/api/v1/recommend/graph", json={"user_id": "u1"})
+            assert resp.status_code == 503
+        finally:
+            main_mod.rec_graph = original
+
+
 if __name__ == "__main__":
     test_consistent_assignment()
     test_distribution()
     test_thompson_sampling()
     test_custom_experiment()
     test_metrics_recording()
+    test_assign_pipeline_hash_only_when_thompson_prob_zero()
+    test_assign_pipeline_thompson_when_prob_one()
     print("All A/B test engine tests passed!")

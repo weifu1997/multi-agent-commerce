@@ -17,17 +17,16 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from contextlib import asynccontextmanager
-from typing import Any
 
 import structlog
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
 from models.schemas import RecommendationRequest, RecommendationResponse
 from orchestrator.supervisor import SupervisorOrchestrator
-from orchestrator.graph import build_recommendation_graph
+from orchestrator.graph import build_recommendation_graph, graph_state_to_response
 from services.ab_test import ABTestEngine
 from services.feature_store import FeatureStore
 from services.metrics import MetricsCollector
@@ -45,7 +44,7 @@ rec_graph = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global rec_graph
-    rec_graph = build_recommendation_graph()
+    rec_graph = build_recommendation_graph(ab_engine=ab_engine)
 
     # 可选接入 Redis Feature Store：ECOM_FEATURE_STORE_ENABLED=true 时启用。
     # 连不上不阻塞启动（UserProfileAgent 内部会自动退回 context 演示数据）。
@@ -93,11 +92,11 @@ async def recommend(request: RecommendationRequest):
     return response
 
 
-@app.post("/api/v1/recommend/graph")
+@app.post("/api/v1/recommend/graph", response_model=RecommendationResponse)
 async def recommend_via_graph(request: RecommendationRequest):
     """使用LangGraph状态图进行推荐 (展示LangGraph能力)"""
-    if not rec_graph:
-        return {"error": "Graph not initialized"}
+    if rec_graph is None:
+        raise HTTPException(status_code=503, detail="Graph not initialized")
     state = {
         "user_id": request.user_id,
         "scene": request.scene,
@@ -105,14 +104,7 @@ async def recommend_via_graph(request: RecommendationRequest):
         "context": request.context,
     }
     result = await rec_graph.ainvoke(state)
-    return {
-        "request_id": result.get("request_id"),
-        "user_id": result.get("user_id"),
-        "products": [p.model_dump() for p in result.get("final_products", [])],
-        "marketing_copies": result.get("marketing_copies", []),
-        "experiment_group": result.get("experiment_group", "control"),
-        "total_latency_ms": round(result.get("total_latency_ms", 0), 1),
-    }
+    return graph_state_to_response(result)
 
 
 @app.get("/api/v1/experiments")
@@ -150,6 +142,11 @@ async def get_metrics():
 @app.post("/api/v1/experiments/{experiment_id}/outcome")
 async def record_outcome(experiment_id: str, group: str, success: bool):
     """记录A/B测试结果,更新Thompson Sampling"""
+    if experiment_id not in ab_engine.experiments:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    names = {g.name for g in ab_engine.experiments[experiment_id].groups}
+    if group not in names:
+        raise HTTPException(status_code=404, detail="group not found")
     ab_engine.record_outcome(experiment_id, group, success)
     return {"status": "recorded"}
 

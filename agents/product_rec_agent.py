@@ -91,7 +91,7 @@ class ProductRecAgent(BaseAgent):
                 success=True,
                 products=[],
                 recall_strategy="rule_based",
-                data={"candidate_count": 0, "reranked": 0},
+                data={"candidate_count": 0, "reranked": 0, "strategy": "rule_based"},
                 confidence=0.8,
             )
 
@@ -122,7 +122,11 @@ class ProductRecAgent(BaseAgent):
             success=True,
             products=chosen[:num_items],
             recall_strategy="collaborative_filter+vector+hot",
-            data={"candidate_count": len(candidates), "reranked": len(chosen)},
+            data={
+                "candidate_count": len(candidates),
+                "reranked": len(chosen),
+                "strategy": "llm" if use_llm else "rule_based",
+            },
             confidence=0.8,
         )
 

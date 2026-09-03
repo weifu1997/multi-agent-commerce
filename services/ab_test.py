@@ -9,6 +9,7 @@ A/B测试引擎
 from __future__ import annotations
 
 import hashlib
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -96,6 +97,19 @@ class ABTestEngine:
 
         best = max(samples, key=lambda x: x[0])[1]
         return {"group": best.name, "config": best.config}
+
+    def assign_pipeline(self, user_id: str, thompson_prob: float = 0.1) -> dict[str, dict]:
+        """Assign rec_strategy (hash + optional Thompson) and copy_style (hash-only)."""
+        if random.random() < thompson_prob:
+            rec = self.assign_thompson(user_id, "rec_strategy")
+            rec["assign"] = "thompson"
+        else:
+            rec = self.assign(user_id, "rec_strategy")
+            rec["assign"] = "hash"
+
+        copy = self.assign(user_id, "copy_style")
+        copy["assign"] = "hash"
+        return {"rec_strategy": rec, "copy_style": copy}
 
     def record_outcome(self, experiment_id: str, group_name: str, success: bool):
         """Update Thompson Sampling posterior with observed outcome."""

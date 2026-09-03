@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializeAsAny
 
 
 class UserSegment(str, Enum):
@@ -83,12 +83,19 @@ class InventoryResult(AgentResult):
     purchase_limits: dict[str, int] = Field(default_factory=dict)
 
 
+class ExperimentAssignment(BaseModel):
+    group: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    assign: Literal["hash", "thompson"] = "hash"
+
+
 class RecommendationResponse(BaseModel):
     request_id: str
     user_id: str
     products: list[Product] = Field(default_factory=list)
     marketing_copies: list[dict[str, str]] = Field(default_factory=list)
     experiment_group: str = "control"
-    agent_results: dict[str, AgentResult] = Field(default_factory=dict)
+    experiments: dict[str, ExperimentAssignment] = Field(default_factory=dict)
+    agent_results: dict[str, SerializeAsAny[AgentResult]] = Field(default_factory=dict)
     total_latency_ms: float = 0.0
     timestamp: datetime = Field(default_factory=datetime.now)

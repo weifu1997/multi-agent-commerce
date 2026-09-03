@@ -11,19 +11,22 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
+from fastapi.encoders import jsonable_encoder
 
 from agents.inventory_agent import InventoryAgent
 from agents.product_rec_agent import MOCK_PRODUCTS, ProductRecAgent
 from models.schemas import (
+    ExperimentAssignment,
     InventoryResult,
     MarketingCopyResult,
     Product,
     ProductRecResult,
     RecommendationRequest,
+    RecommendationResponse,
     UserProfile,
     UserProfileResult,
 )
+from orchestrator.graph import build_recommendation_graph, graph_state_to_response
 from orchestrator.supervisor import SupervisorOrchestrator, select_final_products
 
 from services.ab_test import ABTestEngine
@@ -175,6 +178,43 @@ def test_rec_agent_rule_rerank_deterministic():
     assert [p.product_id for p in r1.products] == [p.product_id for p in r2.products]
     assert len(r1.products) == 2
     assert r1.products[0].category == "耳机"
+    assert r1.data["strategy"] == "rule_based"
+    assert r2.data["strategy"] == "rule_based"
+
+
+def test_rec_agent_llm_without_profile_uses_rule_strategy():
+    async def run():
+        agent = ProductRecAgent()
+        agent.llm = None
+        return await agent.run(
+            user_profile=None,
+            num_items=1,
+            candidates=[_p("A")],
+            strategy="llm",
+        )
+
+    result = asyncio.run(run())
+    assert result.data["strategy"] == "rule_based"
+
+
+def test_rec_agent_llm_branch_sets_llm_strategy(monkeypatch):
+    async def run():
+        agent = ProductRecAgent()
+
+        async def fake_llm(profile, candidates):
+            return list(candidates)
+
+        monkeypatch.setattr(agent, "_rerank_llm", fake_llm)
+        profile = UserProfile(user_id="u1", preferred_categories=["手机"])
+        return await agent.run(
+            user_profile=profile,
+            num_items=1,
+            candidates=[_p("A")],
+            strategy="llm",
+        )
+
+    result = asyncio.run(run())
+    assert result.data["strategy"] == "llm"
 
 
 # --------------------------------------------------------------------------- #
@@ -211,6 +251,11 @@ def test_supervisor_a_b_drives_strategy_and_count_stable(monkeypatch):
     assert all(p.stock > 0 for p in resp.products)
     # 实验组出现在响应里，且确实来自实验引擎
     assert resp.experiment_group in {"control", "treatment_llm"}
+    assert "rec_strategy" in resp.experiments
+    assert "copy_style" in resp.experiments
+    assert resp.experiments["rec_strategy"].assign == "hash"
+    assert resp.experiments["copy_style"].assign == "hash"
+    assert resp.experiment_group == resp.experiments["rec_strategy"].group
 
 
 # --------------------------------------------------------------------------- #
@@ -218,8 +263,134 @@ def test_supervisor_a_b_drives_strategy_and_count_stable(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def test_graph_compiles_with_expected_nodes():
-    from orchestrator.graph import build_recommendation_graph
-
     graph = build_recommendation_graph()
     names = {name for name in graph.get_graph().nodes}
     assert {"init", "parallel_phase1", "parallel_phase2", "filter", "marketing_copy", "aggregate"} <= names
+
+
+def test_jsonable_encoder_keeps_agent_result_subclass_fields():
+    resp = RecommendationResponse(
+        request_id="r1",
+        user_id="u1",
+        experiment_group="control",
+        experiments={
+            "rec_strategy": ExperimentAssignment(
+                group="control", config={"rerank": "rule_based"}, assign="hash"
+            ),
+            "copy_style": ExperimentAssignment(
+                group="formal", config={"style": "formal"}, assign="hash"
+            ),
+        },
+        agent_results={
+            "user_profile": UserProfileResult(
+                profile=UserProfile(user_id="u1"), success=True
+            ),
+            "product_recall": ProductRecResult(
+                products=[_p("P1")],
+                recall_strategy="collaborative_filter+vector+hot",
+            ),
+            "product_rec": ProductRecResult(
+                products=[_p("P1")],
+                data={"strategy": "rule_based"},
+            ),
+            "inventory": InventoryResult(
+                available_products=["P1"],
+                low_stock_alerts=[{"product_id": "P3", "level": "critical"}],
+                purchase_limits={"P1": 2},
+            ),
+            "marketing_copy": MarketingCopyResult(
+                copies=[{"product_id": "P1", "copy": "x"}],
+                prompt_template_used="tpl",
+            ),
+        },
+    )
+    encoded = jsonable_encoder(resp)
+    ar = encoded["agent_results"]
+    assert ar["user_profile"]["profile"]["user_id"] == "u1"
+    assert ar["product_recall"]["products"][0]["product_id"] == "P1"
+    assert ar["product_rec"]["products"][0]["product_id"] == "P1"
+    assert ar["inventory"]["available_products"] == ["P1"]
+    assert ar["inventory"]["low_stock_alerts"][0]["product_id"] == "P3"
+    assert ar["inventory"]["purchase_limits"] == {"P1": 2}
+    assert ar["marketing_copy"]["prompt_template_used"] == "tpl"
+
+
+def test_graph_state_to_response_emits_product_rec_key():
+    resp = graph_state_to_response(
+        {
+            "request_id": "r1",
+            "user_id": "u1",
+            "final_products": [_p("P1")],
+            "marketing_copies": [{"product_id": "P1", "copy": "x"}],
+            "experiment_group": "control",
+            "experiments": {
+                "rec_strategy": {
+                    "group": "control",
+                    "config": {"rerank": "rule_based"},
+                    "assign": "hash",
+                },
+                "copy_style": {
+                    "group": "formal",
+                    "config": {"style": "formal"},
+                    "assign": "hash",
+                },
+            },
+            "agent_results": {
+                "user_profile": UserProfileResult(profile=UserProfile(user_id="u1")),
+                "product_recall": ProductRecResult(products=[_p("P1")]),
+                "product_rec": ProductRecResult(products=[_p("P1")]),
+                "inventory": InventoryResult(available_products=["P1"]),
+                "marketing_copy": MarketingCopyResult(
+                    copies=[{"product_id": "P1", "copy": "x"}]
+                ),
+            },
+            "total_latency_ms": 1.0,
+        }
+    )
+    assert "product_rec" in resp.agent_results
+    assert "rerank" not in resp.agent_results
+    assert resp.experiment_group == resp.experiments["rec_strategy"].group
+    assert resp.timestamp is not None
+
+
+def test_graph_factory_uses_shared_engine_and_writes_product_rec(monkeypatch):
+    import orchestrator.graph as g
+
+    engine = ABTestEngine()
+    seen: list[object] = []
+    original = engine.assign_pipeline
+
+    def spy(user_id, thompson_prob=0.1):
+        seen.append(engine)
+        return original(user_id, thompson_prob)
+
+    monkeypatch.setattr(engine, "assign_pipeline", spy)
+    monkeypatch.setattr(g, "user_profile_agent", _FakeUserProfileAgent())
+    monkeypatch.setattr(g, "product_rec_agent", _FakeRecAgent())
+    monkeypatch.setattr(g, "inventory_agent", _FakeInventoryAgent())
+    monkeypatch.setattr(g, "marketing_copy_agent", _FakeCopyAgent())
+
+    compiled = build_recommendation_graph(ab_engine=engine, thompson_prob=0.0)
+    result = asyncio.run(
+        compiled.ainvoke(
+            {
+                "user_id": "user_001",
+                "scene": "homepage",
+                "num_items": 3,
+                "context": {},
+            }
+        )
+    )
+    assert seen and seen[0] is engine
+    resp = graph_state_to_response(result)
+    assert set(resp.agent_results) >= {
+        "user_profile",
+        "product_recall",
+        "product_rec",
+        "inventory",
+        "marketing_copy",
+    }
+    assert "rerank" not in resp.agent_results
+    assert resp.experiments["rec_strategy"].assign == "hash"
+    assert resp.experiments["copy_style"].assign == "hash"
+    assert resp.experiment_group == resp.experiments["rec_strategy"].group
