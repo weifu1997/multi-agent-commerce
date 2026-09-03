@@ -248,6 +248,7 @@ FORBIDDEN_WORDS = ["最好", "第一", "国家级", "全球首", "绝对", "100%
 |------|------|
 | Agent 编排 | LangGraph + 自研 Supervisor 编排器 |
 | Web 服务 | FastAPI + Uvicorn |
+| 前端演示台 | React + Vite + Tailwind CSS（`cd frontend && npm run dev`）|
 | LLM | MiniMax（OpenAI 兼容接口，可换通义/Kimi 等）|
 | 特征存储 | Redis Sorted Set（滑动窗口实时特征）— **可选接入**：默认内置演示数据，`ECOM_FEATURE_STORE_ENABLED=true` 即连接 Redis |
 | 向量检索 | Milvus（**预留接入点**；当前演示用内置商品表）|
@@ -526,7 +527,39 @@ Content-Type: application/json
     }
   ],
   "experiment_group": "treatment_llm",
-  "total_latency_ms": 1523.4
+  "experiments": {
+    "rec_strategy": {
+      "group": "treatment_llm",
+      "config": {"rerank": "llm"},
+      "assign": "hash"
+    },
+    "copy_style": {
+      "group": "casual",
+      "config": {"style": "casual"},
+      "assign": "hash"
+    }
+  },
+  "agent_results": {
+    "product_rec": {
+      "agent_name": "product_rec",
+      "success": true,
+      "products": [
+        {
+          "product_id": "P001",
+          "name": "iPhone 16 Pro",
+          "category": "手机",
+          "price": 7999.0
+        }
+      ],
+      "data": {
+        "candidate_count": 16,
+        "reranked": 5,
+        "strategy": "llm"
+      }
+    }
+  },
+  "total_latency_ms": 1523.4,
+  "timestamp": "2026-09-04T12:00:00"
 }
 ```
 
